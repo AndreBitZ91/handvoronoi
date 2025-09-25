@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analisador Tático de Andebol com Voronoi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        canvas, video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        canvas { z-index: 10; cursor: crosshair; }
+        .loader {
+            border: 5px solid #f3f3f3; border-top: 5px solid #3498db;
+            border-radius: 50%; width: 50px; height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .active-btn { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5); }
+        .annotation-mode-active { box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.7); background-color: #be185d; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-7xl mx-auto">
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-cyan-400">Analisador Tático de Andebol</h1>
+            <p class="text-lg text-gray-400 mt-2">Visualize o domínio espacial a partir de imagens ou vídeos.</p>
+        </header>
+
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl flex flex-col lg:flex-row gap-6">
+
+            <!-- Painel de Controlo -->
+            <div class="lg:w-1/3 w-full bg-gray-900 p-5 rounded-lg flex flex-col gap-4">
+                <div>
+                    <h2 class="text-2xl font-semibold mb-3 border-b border-gray-700 pb-2">Controlos</h2>
+                    <label for="fileLoader" class="block mb-2 text-sm font-medium text-gray-300">1. Carregar Ficheiro</label>
+                    <input type="file" id="fileLoader" accept="image/*,video/*" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyan-500 file:text-white hover:file:bg-cyan-600 cursor-pointer"/>
+                </div>
+
+                <div id="controls-step2" class="hidden">
+                    <p class="block mb-2 text-sm font-medium text-gray-300">2. Definir Zonas</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="markCourtBtn" type="button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition">Marcar Campo</button>
+                        <button id="mark6mBtn" type="button" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition">Marcar Área 6m</button>
+                    </div>
+                </div>
+
+                <div id="controls-step3" class="hidden">
+                    <p class="block mb-2 text-sm font-medium text-gray-300">3. Adicionar Jogadores (no 1º frame)</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="addTeamAPlayer" type="button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition">Equipa A</button>
+                        <button id="addTeamBPlayer" type="button" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition">Equipa B</button>
+                    </div>
+                </div>
+                 
+                <div id="controls-step4" class="hidden">
+                    <p class="block mb-2 text-sm font-medium text-gray-300">4. Analisar</p>
+                    <button id="generateImageAnalysis" type="button" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition">Analisar Imagem</button>
+                    <button id="generateVideoAnalysis" type="button" class="w-full bg-green-700 hover:bg-green-800 text-white font-bold py-2 px-4 rounded-lg transition hidden">Iniciar Anotação Manual</button>
+                    <div id="annotation-controls" class="hidden mt-2 flex flex-col gap-2">
+                        <button id="nextFrameBtn" type="button" class="w-full bg-pink-600 hover:bg-pink-700 text-white font-bold py-2 px-4 rounded-lg transition">Próximo Frame (5F)</button>
+                    </div>
+                </div>
+                
+                <div class="mt-auto pt-4 flex flex-col gap-2">
+                     <p id="instructionText" class="text-sm text-center text-cyan-400 h-10"></p>
+                     <div class="grid grid-cols-2 gap-2">
+                        <button id="downloadBtn" type="button" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition disabled:opacity-50" disabled>Download Frame</button>
+                        <button id="exportVideoBtn" type="button" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-lg transition disabled:opacity-50" disabled>Exportar Vídeo</button>
+                     </div>
+                    <button id="resetButton" type="button" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition disabled:opacity-50" disabled>Limpar Tudo</button>
+                </div>
+            </div>
+
+            <!-- Media e Análise -->
+            <div class="lg:w-2/3 w-full flex flex-col">
+                <div id="mediaContainer" class="relative w-full aspect-video bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden shadow-inner">
+                    <video id="videoPlayer" class="hidden" controls muted loop playsinline></video>
+                    <canvas id="canvas"></canvas>
+                    <div id="loading" class="hidden absolute inset-0 bg-gray-900 bg-opacity-75 flex-col items-center justify-center z-20">
+                        <div class="loader"></div>
+                        <p id="loadingText" class="mt-4 text-lg">A processar...</p>
+                        <div class="w-3/4 bg-gray-600 rounded-full h-2.5 mt-4">
+                            <div id="progressBar" class="bg-cyan-400 h-2.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <p id="mediaPlaceholder" class="text-gray-400">Carregue uma imagem ou vídeo para começar.</p>
+                </div>
+                
+                <div id="analysisSection" class="mt-6 bg-gray-900 p-5 rounded-lg hidden">
+                    <!-- Gráficos de Superioridade -->
+                    <div id="mainAnalysis"></div>
+                    <div id="sixMeterAnalysis" class="mt-4"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <a id="downloadLink" class="hidden"></a>
+
+    <script>
+        // --- DOM Elements ---
+        const fileLoader = document.getElementById('fileLoader');
+        const canvas = document.getElementById('canvas'), ctx = canvas.getContext('2d');
+        const videoPlayer = document.getElementById('videoPlayer');
+        const mediaContainer = document.getElementById('mediaContainer');
+        const mediaPlaceholder = document.getElementById('mediaPlaceholder');
+        const loadingDiv = document.getElementById('loading'), loadingText = document.getElementById('loadingText'), progressBar = document.getElementById('progressBar');
+        const instructionText = document.getElementById('instructionText');
+        const downloadLink = document.getElementById('downloadLink');
+        const controls = {
+            step2: document.getElementById('controls-step2'),
+            step3: document.getElementById('controls-step3'),
+            step4: document.getElementById('controls-step4'),
+            annotation: document.getElementById('annotation-controls'),
+        };
+        const buttons = {
+            markCourt: document.getElementById('markCourtBtn'),
+            mark6m: document.getElementById('mark6mBtn'),
+            addTeamA: document.getElementById('addTeamAPlayer'),
+            addTeamB: document.getElementById('addTeamBPlayer'),
+            analyzeImage: document.getElementById('generateImageAnalysis'),
+            analyzeVideo: document.getElementById('generateVideoAnalysis'),
+            nextFrame: document.getElementById('nextFrameBtn'),
+            download: document.getElementById('downloadBtn'),
+            exportVideo: document.getElementById('exportVideoBtn'),
+            reset: document.getElementById('resetButton'),
+        };
+        const analysisUI = {
+            section: document.getElementById('analysisSection'),
+            main: document.getElementById('mainAnalysis'),
+            sixMeter: document.getElementById('sixMeterAnalysis'),
+        };
+
+        // --- State ---
+        let media = { type: null, element: null };
+        let teamA = [], teamB = [];
+        let courtBoundary = null, sixMeterArea = null;
+        let drawingMode = null, tempPoints = [];
+        let analysisGenerated = false;
+        let videoAnalysisData = [];
+        let annotation = {
+            active: false,
+            keyframes: new Map(),
+            currentFrame: 0,
+            startTime: 0,
+        };
+        let selectedPlayer = null;
+
+        // --- Constants ---
+        const COLORS = { A: 'rgba(59, 130, 246, 0.8)', B: 'rgba(239, 68, 68, 0.8)', COURT: 'rgba(255, 255, 0, 0.8)', SIX_METER: 'rgba(255, 165, 0, 0.8)' };
+        const VORONOI_COLORS = { A: {R:59, G:130, B:246}, B: {R:239, G:68, B:68} };
+        const PLAYER_RADIUS = 6;
+        const FRAME_RATE = 25;
+        const ANNOTATION_STEP = 5;
+
+        // --- Main Functions ---
+        function setInstruction(text) {
+            instructionText.textContent = text;
+        }
+
+        function setup() {
+            fileLoader.addEventListener('change', handleFileLoad);
+            canvas.addEventListener('mousedown', handleCanvasMouseDown);
+            canvas.addEventListener('mousemove', handleCanvasMouseMove);
+            canvas.addEventListener('mouseup', handleCanvasMouseUp);
+            canvas.addEventListener('contextmenu', handleCanvasRightClick);
+            videoPlayer.addEventListener('timeupdate', drawVideoFrame);
+            
+            Object.values(buttons).forEach(btn => btn.addEventListener('click', handleButtonClick));
+            window.addEventListener('resize', () => draw(false));
+            setInstruction('Carregue uma imagem ou vídeo para começar.');
+        }
+
+        function handleFileLoad(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            resetState(false);
+            const url = URL.createObjectURL(file);
+            if (file.type.startsWith('image/')) {
+                media.type = 'image';
+                const img = new Image();
+                img.onload = () => { media.element = img; initializeMedia(); };
+                img.src = url;
+            } else if (file.type.startsWith('video/')) {
+                media.type = 'video';
+                media.element = videoPlayer;
+                videoPlayer.src = url;
+                videoPlayer.onloadedmetadata = () => { initializeMedia(); };
+            }
+        }
+
+        function initializeMedia() {
+            mediaPlaceholder.classList.add('hidden');
+            if (media.type === 'video') videoPlayer.classList.remove('hidden');
+            resizeMedia();
+            draw(true);
+            buttons.reset.disabled = false;
+            controls.step2.classList.remove('hidden');
+            setInstruction('Defina os 4 cantos do campo.');
+        }
+
+        function handleButtonClick(e) {
+            const id = e.target.id;
+            drawingMode = null;
+            switch(id) {
+                case 'markCourtBtn': drawingMode = 'court'; tempPoints = []; setInstruction('Clique no 1º canto do campo.'); break;
+                case 'mark6mBtn': drawingMode = '6m'; tempPoints = []; setInstruction('Clique em pontos na linha de 6m. Clique direito para terminar.'); break;
+                case 'addTeamAPlayer': drawingMode = 'playerA'; setInstruction('Adicione jogadores da Equipa A.'); break;
+                case 'addTeamBPlayer': drawingMode = 'playerB'; setInstruction('Adicione jogadores da Equipa B.'); break;
+                case 'generateImageAnalysis': runImageAnalysis(); break;
+                case 'generateVideoAnalysis': startAnnotationProcess(); break;
+                case 'nextFrameBtn': handleNextFrameClick(); break;
+                case 'downloadBtn': downloadFrame(); break;
+                case 'exportVideoBtn': runVideoExport(); break;
+                case 'resetButton': 
+                    const keepFile = !!media.element;
+                    resetState(keepFile);
+                    if (keepFile) initializeMedia(); else draw(false);
+                    break;
+            }
+            updateUIState();
+        }
+        
+        // --- Drawing and Canvas Logic ---
+        function resizeMedia() {
+            const containerRect = mediaContainer.getBoundingClientRect();
+            canvas.width = containerRect.width;
+            canvas.height = containerRect.height;
+        }
+
+        function draw(redrawMedia, playersA = teamA, playersB = teamB) {
+            if (!media.element && !redrawMedia) {
+                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                 mediaPlaceholder.classList.remove('hidden');
+                 return;
+            }
+             if (!media.element) return;
+            resizeMedia();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (redrawMedia && media.type === 'image') {
+                ctx.drawImage(media.element, 0, 0, canvas.width, canvas.height);
+            }
+            if (courtBoundary) drawPolygon(courtBoundary.points, COLORS.COURT);
+            if (sixMeterArea) drawPolygon(sixMeterArea.points, COLORS.SIX_METER);
+            drawPlayers(playersA, COLORS.A);
+            drawPlayers(playersB, COLORS.B);
+        }
+        
+        function drawPolygon(points, color) {
+            if (!points || points.length < 2) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        function drawPlayers(players, color) {
+            players.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, 2 * Math.PI, false);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.stroke();
+            });
+        }
+        
+        function drawVoronoiOverlay(imageData) {
+            if (imageData) ctx.putImageData(imageData, 0, 0);
+        }
+
+        function drawVideoFrame() {
+            if (analysisGenerated && videoAnalysisData.length > 0) {
+                const frameIndex = Math.min(videoAnalysisData.length - 1, Math.floor(videoPlayer.currentTime * FRAME_RATE));
+                const frameData = videoAnalysisData[frameIndex];
+                if (frameData) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    drawVoronoiOverlay(frameData.imageData);
+                    drawPolygon(frameData.court.points, COLORS.COURT);
+                    drawPolygon(frameData.sixMeter.points, COLORS.SIX_METER);
+                    drawPlayers(frameData.teamA, COLORS.A);
+                    drawPlayers(frameData.teamB, COLORS.B);
+                    updateAnalysisUI(frameData.stats.areaA, frameData.stats.areaB, frameData.stats.areaA6m, frameData.stats.areaB6m);
+                }
+            } else if (!annotation.active) {
+                draw(false);
+            }
+        }
+
+        // --- Mouse/Interaction Logic ---
+        function handleCanvasMouseDown(e) {
+            if (e.button !== 0) return;
+            const pos = getCanvasCoords(e);
+            if (drawingMode) {
+                switch (drawingMode) {
+                    case 'playerA': teamA.push({ ...pos, id: `A${teamA.length}` }); break;
+                    case 'playerB': teamB.push({ ...pos, id: `B${teamB.length}` }); break;
+                    case 'court':
+                        tempPoints.push(pos);
+                        if (tempPoints.length >= 4) {
+                            courtBoundary = { points: tempPoints };
+                            drawingMode = null;
+                            setInstruction('Defina a área de 6m ou adicione jogadores.');
+                        } else setInstruction(`Clique no ${tempPoints.length + 1}º canto do campo.`);
+                        break;
+                    case '6m': tempPoints.push(pos); break;
+                }
+                draw(true);
+                updateUIState();
+            } else if (annotation.active) {
+                const allPlayers = [...(annotation.keyframes.get(annotation.currentFrame)?.teamA || teamA), ...(annotation.keyframes.get(annotation.currentFrame)?.teamB || teamB)];
+                selectedPlayer = allPlayers.find(p => ((pos.x - p.x)**2 + (pos.y - p.y)**2) < PLAYER_RADIUS**2 * 4);
+                if(selectedPlayer) videoPlayer.pause();
+            }
+        }
+
+        function handleCanvasMouseMove(e) {
+            const pos = getCanvasCoords(e);
+            if (drawingMode && !drawingMode.startsWith('player') && tempPoints.length > 0) {
+                 draw(media.type === 'image');
+                 const color = drawingMode === 'court' ? COLORS.COURT : COLORS.SIX_METER;
+                 drawPolygon([...tempPoints, pos], color);
+            } else if (annotation.active && selectedPlayer) {
+                 selectedPlayer.x = pos.x;
+                 selectedPlayer.y = pos.y;
+                 const currentKeyframe = annotation.keyframes.get(annotation.currentFrame);
+                 draw(false, currentKeyframe.teamA, currentKeyframe.teamB); 
+            }
+        }
+
+        function handleCanvasMouseUp(e) {
+            if (annotation.active && selectedPlayer) selectedPlayer = null;
+        }
+        
+        function handleCanvasRightClick(e) {
+            e.preventDefault();
+            if (drawingMode === '6m' && tempPoints.length > 2) {
+                sixMeterArea = { points: tempPoints };
+                drawingMode = null; tempPoints = [];
+                draw(true); updateUIState();
+                setInstruction('Adicione jogadores.');
+            }
+        }
+        
+        // --- Analysis Logic ---
+        function runImageAnalysis() {
+            loadingDiv.classList.remove('hidden');
+            loadingText.textContent = 'A analisar imagem...';
+            progressBar.parentElement.classList.add('hidden');
+            setTimeout(() => {
+                const { stats, imageData } = calculateVoronoiForFrame(teamA, teamB, courtBoundary, sixMeterArea, false);
+                ctx.clearRect(0,0,canvas.width, canvas.height);
+                ctx.drawImage(media.element, 0, 0, canvas.width, canvas.height);
+                drawVoronoiOverlay(imageData);
+                drawPolygon(courtBoundary.points, COLORS.COURT);
+                drawPolygon(sixMeterArea.points, COLORS.SIX_METER);
+                drawPlayers(teamA, COLORS.A);
+                drawPlayers(teamB, COLORS.B);
+                updateAnalysisUI(stats.areaA, stats.areaB, stats.areaA6m, stats.areaB6m);
+                loadingDiv.classList.add('hidden');
+                analysisGenerated = true;
+                updateUIState();
+                setInstruction('Análise concluída.');
+            }, 50);
+        }
+
+        async function startAnnotationProcess() {
+            annotation.active = true;
+            annotation.startTime = videoPlayer.currentTime;
+            annotation.currentFrame = 0;
+            annotation.keyframes.clear();
+            annotation.keyframes.set(0, {
+                teamA: teamA.map(p => ({...p})), teamB: teamB.map(p => ({...p})),
+                courtBoundary: JSON.parse(JSON.stringify(courtBoundary)),
+                sixMeterArea: JSON.parse(JSON.stringify(sixMeterArea))
+            });
+            videoPlayer.pause();
+            controls.annotation.classList.remove('hidden');
+            buttons.analyzeVideo.classList.add('hidden');
+            setInstruction(`Frame 0/${Math.floor((videoPlayer.duration - annotation.startTime) * FRAME_RATE)}. Posicione jogadores/zonas.`);
+            updateUIState();
+        }
+
+        async function handleNextFrameClick() {
+            annotation.keyframes.set(annotation.currentFrame, {
+                teamA: teamA.map(p => ({...p})), teamB: teamB.map(p => ({...p})),
+                courtBoundary: JSON.parse(JSON.stringify(courtBoundary)),
+                sixMeterArea: JSON.parse(JSON.stringify(sixMeterArea))
+            });
+            annotation.currentFrame += ANNOTATION_STEP;
+            const nextTime = annotation.startTime + annotation.currentFrame / FRAME_RATE;
+            const totalFrames = Math.floor((videoPlayer.duration - annotation.startTime) * FRAME_RATE);
+            if (nextTime >= videoPlayer.duration || annotation.currentFrame > totalFrames) {
+                buttons.nextFrame.textContent = 'Finalizar e Processar Tudo';
+                setInstruction(`Último frame! Clique para processar.`);
+                buttons.nextFrame.onclick = processAnnotatedVideo;
+            } else {
+                setInstruction(`Frame ${annotation.currentFrame}/${totalFrames}. Posicione jogadores/zonas.`);
+                videoPlayer.currentTime = nextTime;
+                await new Promise(res => videoPlayer.onseeked = res);
+                draw(false);
+            }
+        }
+
+        async function processAnnotatedVideo() {
+            annotation.active = false;
+            controls.annotation.classList.add('hidden');
+            loadingDiv.classList.remove('hidden');
+            loadingText.textContent = 'A processar anotações...';
+            progressBar.parentElement.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            const totalFrames = Math.floor((videoPlayer.duration - annotation.startTime) * FRAME_RATE);
+            const keyframeIndexes = Array.from(annotation.keyframes.keys()).sort((a,b) => a - b);
+            for (let i = 0; i < totalFrames; i++) {
+                const interpolatedData = getInterpolatedFrameData(i, keyframeIndexes);
+                const {imageData, stats} = calculateVoronoiForFrame(interpolatedData.teamA, interpolatedData.teamB, interpolatedData.courtBoundary, interpolatedData.sixMeterArea, true);
+                videoAnalysisData[i] = { ...interpolatedData, imageData, stats };
+                progressBar.style.width = `${((i + 1) / totalFrames) * 100}%`;
+            }
+            loadingDiv.classList.add('hidden');
+            analysisGenerated = true;
+            videoPlayer.currentTime = annotation.startTime;
+            videoPlayer.play();
+            updateUIState();
+            setInstruction('Processamento concluído. Reproduza o vídeo.');
+        }
+
+        function getInterpolatedFrameData(frameIndex, keyframeIndexes) {
+            let prevKeyIndex = 0;
+            for(let i = 0; i < keyframeIndexes.length; i++) {
+                if (keyframeIndexes[i] <= frameIndex) prevKeyIndex = i; else break;
+            }
+            const nextKeyIndex = Math.min(prevKeyIndex + 1, keyframeIndexes.length - 1);
+            const prevFrame = keyframeIndexes[prevKeyIndex], nextFrame = keyframeIndexes[nextKeyIndex];
+            if (prevFrame === nextFrame) return annotation.keyframes.get(prevFrame);
+            const t = (frameIndex - prevFrame) / (nextFrame - prevFrame);
+            const prevData = annotation.keyframes.get(prevFrame), nextData = annotation.keyframes.get(nextFrame);
+            const interpolate = (teamPrev, teamNext) => teamPrev.map(pPrev => {
+                const pNext = teamNext.find(p => p.id === pPrev.id);
+                return pNext ? { ...pPrev, x: pPrev.x * (1-t) + pNext.x * t, y: pPrev.y * (1-t) + pNext.y * t } : pPrev;
+            });
+            const interpolateZone = (zonePrev, zoneNext) => {
+                if(!zonePrev || !zoneNext || zonePrev.points.length !== zoneNext.points.length) return zonePrev;
+                const newPoints = zonePrev.points.map((p, i) => ({
+                    x: p.x * (1 - t) + zoneNext.points[i].x * t,
+                    y: p.y * (1 - t) + zoneNext.points[i].y * t
+                }));
+                return { points: newPoints };
+            };
+            return {
+                teamA: interpolate(prevData.teamA, nextData.teamA),
+                teamB: interpolate(prevData.teamB, nextData.teamB),
+                courtBoundary: interpolateZone(prevData.courtBoundary, nextData.courtBoundary),
+                sixMeterArea: interpolateZone(prevData.sixMeterArea, nextData.sixMeterArea)
+            };
+        }
+
+        function calculateVoronoiForFrame(currentPlayersA, currentPlayersB, court, sixM, isVideo = false) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width; tempCanvas.height = canvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            const allPlayers = [ ...currentPlayersA.map(p => ({ ...p, team: 'A' })), ...currentPlayersB.map(p => ({ ...p, team: 'B' })) ];
+            if (allPlayers.length === 0) return { imageData: null, stats: {} };
+            const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            const stats = { areaA: 0, areaB: 0, areaA6m: 0, areaB6m: 0 };
+            const aabb = court ? {
+                minX: Math.floor(Math.min(...court.points.map(p => p.x))), minY: Math.floor(Math.min(...court.points.map(p => p.y))),
+                maxX: Math.ceil(Math.max(...court.points.map(p => p.x))), maxY: Math.ceil(Math.max(...court.points.map(p => p.y))),
+            } : { minX: 0, minY: 0, maxX: canvas.width, maxY: canvas.height };
+
+            for (let y = aabb.minY; y < aabb.maxY; y++) {
+                for (let x = aabb.minX; x < aabb.maxX; x++) {
+                    const point = { x, y };
+                    if (court && !isPointInPolygon(point, court)) continue;
+                    let minDistanceSq = Infinity, closestPlayer = null;
+                    for (const player of allPlayers) {
+                        const distSq = (x - player.x) ** 2 + (y - player.y) ** 2;
+                        if (distSq < minDistanceSq) { minDistanceSq = distSq; closestPlayer = player; }
+                    }
+                    if (closestPlayer) {
+                        const i = (y * canvas.width + x) * 4;
+                        const {R, G, B} = closestPlayer.team === 'A' ? VORONOI_COLORS.A : VORONOI_COLORS.B;
+                        if (closestPlayer.team === 'A') stats.areaA++; else stats.areaB++;
+                        data[i] = R; data[i+1] = G; data[i+2] = B; data[i+3] = 180;
+                        if (sixM && isPointInPolygon(point, sixM)) {
+                            if (closestPlayer.team === 'A') stats.areaA6m++; else stats.areaB6m++;
+                        }
+                    }
+                }
+            }
+            return { imageData, stats };
+        }
+        
+        // --- UI Update and State Management ---
+        function updateUIState() {
+            const hasMedia = !!media.element;
+            buttons.reset.disabled = !hasMedia;
+            buttons.download.disabled = !analysisGenerated;
+            buttons.exportVideo.disabled = !(analysisGenerated && media.type === 'video');
+            controls.step2.classList.toggle('hidden', !hasMedia || annotation.active);
+            controls.step3.classList.toggle('hidden', !courtBoundary || annotation.active);
+            controls.step4.classList.toggle('hidden', (teamA.length === 0 && teamB.length === 0));
+            controls.annotation.classList.toggle('hidden', !annotation.active);
+            if (hasMedia) {
+                buttons.analyzeImage.classList.toggle('hidden', media.type !== 'image' || annotation.active);
+                buttons.analyzeVideo.classList.toggle('hidden', media.type !== 'video' || annotation.active);
+            }
+        }
+
+        function updateAnalysisUI(areaA, areaB, areaA6m, areaB6m) {
+            const totalArea = (areaA || 0) + (areaB || 0);
+            if (totalArea > 0) {
+                 const percA = (areaA / totalArea) * 100, percB = 100 - percA;
+                 analysisUI.main.innerHTML = `<h3 class="text-xl font-semibold mb-3">Superioridade Total (Campo)</h3><div class="w-full bg-gray-700 rounded-full h-8 overflow-hidden flex text-white font-bold"><div class="bg-blue-600 h-full flex items-center justify-center text-sm transition-all duration-300" style="width: ${percA}%;">${percA.toFixed(1)}%</div><div class="bg-red-600 h-full flex items-center justify-center text-sm transition-all duration-300" style="width: ${percB}%;">${percB.toFixed(1)}%</div></div>`;
+            }
+            const total6mArea = (areaA6m || 0) + (areaB6m || 0);
+            if (sixMeterArea && total6mArea > 0) {
+                 const percA6m = (areaA6m / total6mArea) * 100, percB6m = 100 - percA6m;
+                 analysisUI.sixMeter.innerHTML = `<h3 class="text-xl font-semibold mb-3">Superioridade na Área de 6 Metros</h3><div class="w-full bg-gray-700 rounded-full h-8 overflow-hidden flex text-white font-bold"><div class="bg-blue-600 h-full flex items-center justify-center text-sm transition-all duration-300" style="width: ${percA6m}%;">${percA6m.toFixed(1)}%</div><div class="bg-red-600 h-full flex items-center justify-center text-sm transition-all duration-300" style="width: ${percB6m}%;">${percB6m.toFixed(1)}%</div></div>`;
+            } else analysisUI.sixMeter.innerHTML = '';
+            analysisUI.section.classList.remove('hidden');
+        }
+        
+        function resetState(keepFile) {
+            teamA = []; teamB = [];
+            courtBoundary = null; sixMeterArea = null;
+            drawingMode = null; tempPoints = [];
+            analysisGenerated = false;
+            annotation = { active: false, keyframes: new Map(), currentFrame: 0, startTime: 0 };
+            videoAnalysisData = [];
+            analysisUI.section.classList.add('hidden');
+            buttons.nextFrame.textContent = 'Próximo Frame (5F)';
+            buttons.nextFrame.onclick = handleNextFrameClick;
+            if (!keepFile) {
+                media = { type: null, element: null };
+                videoPlayer.src = '';
+                videoPlayer.classList.add('hidden');
+                mediaPlaceholder.classList.remove('hidden');
+                fileLoader.value = '';
+            }
+            draw(true);
+            updateUIState();
+        }
+
+        // --- Export Functions ---
+        function downloadFrame() {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width; tempCanvas.height = canvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (media.type === 'video') tempCtx.drawImage(videoPlayer, 0, 0, canvas.width, canvas.height);
+            else if(media.type === 'image') tempCtx.drawImage(media.element, 0, 0, canvas.width, canvas.height);
+            tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height);
+            downloadLink.href = tempCanvas.toDataURL('image/png');
+            downloadLink.download = `analise_frame_${media.type === 'video' ? videoPlayer.currentTime.toFixed(2) : 'imagem'}.png`;
+            downloadLink.click();
+        }
+
+        async function runVideoExport() {
+            loadingDiv.classList.remove('hidden');
+            loadingText.textContent = 'A exportar vídeo...';
+            progressBar.parentElement.classList.remove('hidden');
+            progressBar.style.width = '0%';
+
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = canvas.width; exportCanvas.height = canvas.height;
+            const exportCtx = exportCanvas.getContext('2d');
+            
+            const stream = exportCanvas.captureStream(FRAME_RATE);
+            const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            const chunks = [];
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                downloadLink.href = url;
+                downloadLink.download = 'analise_video.webm';
+                downloadLink.click();
+                URL.revokeObjectURL(url);
+                loadingDiv.classList.add('hidden');
+                setInstruction('Exportação concluída.');
+            };
+            
+            recorder.start();
+            
+            for (let i = 0; i < videoAnalysisData.length; i++) {
+                const frameData = videoAnalysisData[i];
+                const time = annotation.startTime + i / FRAME_RATE;
+                videoPlayer.currentTime = time;
+                await new Promise(res => videoPlayer.onseeked = res);
+
+                exportCtx.drawImage(videoPlayer, 0, 0, exportCanvas.width, exportCanvas.height);
+                
+                const overlayCanvas = document.createElement('canvas');
+                overlayCanvas.width = canvas.width; overlayCanvas.height = canvas.height;
+                overlayCanvas.getContext('2d').putImageData(frameData.imageData, 0, 0);
+
+                exportCtx.drawImage(overlayCanvas, 0, 0);
+                drawPolygon(frameData.court.points, COLORS.COURT);
+                drawPolygon(frameData.sixMeter.points, COLORS.SIX_METER);
+                drawPlayers(frameData.teamA, COLORS.A);
+                drawPlayers(frameData.teamB, COLORS.B);
+
+                progressBar.style.width = `${((i + 1) / videoAnalysisData.length) * 100}%`;
+            }
+
+            recorder.stop();
+        }
+
+        // --- Utility Functions ---
+        function getCanvasCoords(e) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        function isPointInPolygon(p, poly) {
+            if (!poly || !poly.points || poly.points.length < 3) return false;
+            const points = poly.points;
+            let wn = 0;
+            for (let i = 0; i < points.length; i++) {
+                const p1 = points[i];
+                const p2 = points[(i + 1) % points.length];
+                if (p1.y <= p.y) {
+                    if (p2.y > p.y && ((p2.x - p1.x) * (p.y - p1.y) - (p.x - p1.x) * (p2.y - p1.y)) > 0) wn++;
+                } else {
+                    if (p2.y <= p.y && ((p2.x - p1.x) * (p.y - p1.y) - (p.x - p1.x) * (p2.y - p1.y)) < 0) wn--;
+                }
+            }
+            return wn !== 0;
+        }
+        
+        setup();
+
+    </script>
+</body>
+</html>
+
