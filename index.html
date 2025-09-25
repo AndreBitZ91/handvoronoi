@@ -283,8 +283,8 @@
                 if (frameData) {
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     drawVoronoiOverlay(frameData.imageData);
-                    drawPolygon(frameData.court.points, COLORS.COURT);
-                    drawPolygon(frameData.sixMeter.points, COLORS.SIX_METER);
+                    if (frameData.court) drawPolygon(frameData.court.points, COLORS.COURT);
+                    if (frameData.sixMeter) drawPolygon(frameData.sixMeter.points, COLORS.SIX_METER);
                     drawPlayers(frameData.teamA, COLORS.A);
                     drawPlayers(frameData.teamB, COLORS.B);
                     updateAnalysisUI(frameData.stats.areaA, frameData.stats.areaB, frameData.stats.areaA6m, frameData.stats.areaB6m);
@@ -364,7 +364,7 @@
                 ctx.drawImage(media.element, 0, 0, canvas.width, canvas.height);
                 drawVoronoiOverlay(imageData);
                 drawPolygon(courtBoundary.points, COLORS.COURT);
-                drawPolygon(sixMeterArea.points, COLORS.SIX_METER);
+                if (sixMeterArea) drawPolygon(sixMeterArea.points, COLORS.SIX_METER);
                 drawPlayers(teamA, COLORS.A);
                 drawPlayers(teamB, COLORS.B);
                 updateAnalysisUI(stats.areaA, stats.areaB, stats.areaA6m, stats.areaB6m);
@@ -382,8 +382,8 @@
             annotation.keyframes.clear();
             annotation.keyframes.set(0, {
                 teamA: teamA.map(p => ({...p})), teamB: teamB.map(p => ({...p})),
-                courtBoundary: JSON.parse(JSON.stringify(courtBoundary)),
-                sixMeterArea: JSON.parse(JSON.stringify(sixMeterArea))
+                courtBoundary: courtBoundary ? JSON.parse(JSON.stringify(courtBoundary)) : null,
+                sixMeterArea: sixMeterArea ? JSON.parse(JSON.stringify(sixMeterArea)) : null
             });
             videoPlayer.pause();
             controls.annotation.classList.remove('hidden');
@@ -394,20 +394,11 @@
 
         async function handleNextFrameClick() {
             const currentKeyframeData = annotation.keyframes.get(annotation.currentFrame);
-            // Save current (potentially modified) player positions
-            currentKeyframeData.teamA.forEach(p => {
-                const originalPlayer = teamA.find(op => op.id === p.id);
-                if(originalPlayer) { p.x = originalPlayer.x; p.y = originalPlayer.y; }
-            });
-             currentKeyframeData.teamB.forEach(p => {
-                const originalPlayer = teamB.find(op => op.id === p.id);
-                if(originalPlayer) { p.x = originalPlayer.x; p.y = originalPlayer.y; }
-            });
-
+            
             annotation.keyframes.set(annotation.currentFrame, {
                 ...currentKeyframeData,
-                courtBoundary: JSON.parse(JSON.stringify(courtBoundary)),
-                sixMeterArea: JSON.parse(JSON.stringify(sixMeterArea))
+                courtBoundary: courtBoundary ? JSON.parse(JSON.stringify(courtBoundary)) : null,
+                sixMeterArea: sixMeterArea ? JSON.parse(JSON.stringify(sixMeterArea)) : null
             });
 
             annotation.currentFrame += ANNOTATION_STEP;
@@ -423,7 +414,6 @@
                 const newKeyframeData = JSON.parse(JSON.stringify(lastKeyframeData));
                 annotation.keyframes.set(annotation.currentFrame, newKeyframeData);
 
-                // Update global state for editing
                 teamA = newKeyframeData.teamA;
                 teamB = newKeyframeData.teamB;
                 courtBoundary = newKeyframeData.courtBoundary;
@@ -474,7 +464,8 @@
                 return pNext ? { ...pPrev, x: pPrev.x * (1-t) + pNext.x * t, y: pPrev.y * (1-t) + pNext.y * t } : pPrev;
             });
             const interpolateZone = (zonePrev, zoneNext) => {
-                if(!zonePrev || !zoneNext || !zonePrev.points || !zoneNext.points || zonePrev.points.length !== zoneNext.points.length) return zonePrev;
+                if(!zonePrev || !zoneNext) return zonePrev;
+                if (!zonePrev.points || !zoneNext.points || zonePrev.points.length !== zoneNext.points.length) return zonePrev;
                 const newPoints = zonePrev.points.map((p, i) => ({
                     x: p.x * (1 - t) + zoneNext.points[i].x * t,
                     y: p.y * (1 - t) + zoneNext.points[i].y * t
@@ -484,8 +475,8 @@
             return {
                 teamA: interpolate(prevData.teamA, nextData.teamA),
                 teamB: interpolate(prevData.teamB, nextData.teamB),
-                courtBoundary: interpolateZone(prevData.courtBoundary, nextData.courtBoundary),
-                sixMeterArea: interpolateZone(prevData.sixMeterArea, nextData.sixMeterArea)
+                court: interpolateZone(prevData.courtBoundary, nextData.courtBoundary),
+                sixMeter: interpolateZone(prevData.sixMeterArea, nextData.sixMeterArea)
             };
         }
 
@@ -652,17 +643,11 @@
 
                 exportCtx.drawImage(overlayCanvas, 0, 0);
 
-                // Re-draw zones and players on top for clarity
-                const tempCanvasForDrawing = document.createElement('canvas');
-                tempCanvasForDrawing.width = canvas.width; tempCanvasForDrawing.height = canvas.height;
-                const tempCtxForDrawing = tempCanvasForDrawing.getContext('2d');
-                
-                drawPolygon.call({ctx: tempCtxForDrawing}, frameData.court.points, COLORS.COURT);
-                drawPolygon.call({ctx: tempCtxForDrawing}, frameData.sixMeter.points, COLORS.SIX_METER);
+                const tempCtxForDrawing = exportCtx;
+                if (frameData.court) drawPolygon.call({ctx: tempCtxForDrawing}, frameData.court.points, COLORS.COURT);
+                if (frameData.sixMeter) drawPolygon.call({ctx: tempCtxForDrawing}, frameData.sixMeter.points, COLORS.SIX_METER);
                 drawPlayers.call({ctx: tempCtxForDrawing}, frameData.teamA, COLORS.A);
                 drawPlayers.call({ctx: tempCtxForDrawing}, frameData.teamB, COLORS.B);
-
-                exportCtx.drawImage(tempCanvasForDrawing, 0, 0);
 
                 progressBar.style.width = `${((i + 1) / videoAnalysisData.length) * 100}%`;
             }
