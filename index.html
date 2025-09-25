@@ -315,7 +315,9 @@
                 draw(true);
                 updateUIState();
             } else if (annotation.active) {
-                const allPlayers = [...(annotation.keyframes.get(annotation.currentFrame)?.teamA || teamA), ...(annotation.keyframes.get(annotation.currentFrame)?.teamB || teamB)];
+                const currentKeyframe = annotation.keyframes.get(annotation.currentFrame);
+                if (!currentKeyframe) return;
+                const allPlayers = [...currentKeyframe.teamA, ...currentKeyframe.teamB];
                 selectedPlayer = allPlayers.find(p => ((pos.x - p.x)**2 + (pos.y - p.y)**2) < PLAYER_RADIUS**2 * 4);
                 if(selectedPlayer) videoPlayer.pause();
             }
@@ -331,7 +333,9 @@
                  selectedPlayer.x = pos.x;
                  selectedPlayer.y = pos.y;
                  const currentKeyframe = annotation.keyframes.get(annotation.currentFrame);
-                 draw(false, currentKeyframe.teamA, currentKeyframe.teamB); 
+                 if (currentKeyframe) {
+                    draw(false, currentKeyframe.teamA, currentKeyframe.teamB); 
+                 }
             }
         }
 
@@ -389,19 +393,42 @@
         }
 
         async function handleNextFrameClick() {
+            const currentKeyframeData = annotation.keyframes.get(annotation.currentFrame);
+            // Save current (potentially modified) player positions
+            currentKeyframeData.teamA.forEach(p => {
+                const originalPlayer = teamA.find(op => op.id === p.id);
+                if(originalPlayer) { p.x = originalPlayer.x; p.y = originalPlayer.y; }
+            });
+             currentKeyframeData.teamB.forEach(p => {
+                const originalPlayer = teamB.find(op => op.id === p.id);
+                if(originalPlayer) { p.x = originalPlayer.x; p.y = originalPlayer.y; }
+            });
+
             annotation.keyframes.set(annotation.currentFrame, {
-                teamA: teamA.map(p => ({...p})), teamB: teamB.map(p => ({...p})),
+                ...currentKeyframeData,
                 courtBoundary: JSON.parse(JSON.stringify(courtBoundary)),
                 sixMeterArea: JSON.parse(JSON.stringify(sixMeterArea))
             });
+
             annotation.currentFrame += ANNOTATION_STEP;
             const nextTime = annotation.startTime + annotation.currentFrame / FRAME_RATE;
             const totalFrames = Math.floor((videoPlayer.duration - annotation.startTime) * FRAME_RATE);
+
             if (nextTime >= videoPlayer.duration || annotation.currentFrame > totalFrames) {
                 buttons.nextFrame.textContent = 'Finalizar e Processar Tudo';
                 setInstruction(`Último frame! Clique para processar.`);
                 buttons.nextFrame.onclick = processAnnotatedVideo;
             } else {
+                const lastKeyframeData = annotation.keyframes.get(annotation.currentFrame - ANNOTATION_STEP);
+                const newKeyframeData = JSON.parse(JSON.stringify(lastKeyframeData));
+                annotation.keyframes.set(annotation.currentFrame, newKeyframeData);
+
+                // Update global state for editing
+                teamA = newKeyframeData.teamA;
+                teamB = newKeyframeData.teamB;
+                courtBoundary = newKeyframeData.courtBoundary;
+                sixMeterArea = newKeyframeData.sixMeterArea;
+                
                 setInstruction(`Frame ${annotation.currentFrame}/${totalFrames}. Posicione jogadores/zonas.`);
                 videoPlayer.currentTime = nextTime;
                 await new Promise(res => videoPlayer.onseeked = res);
@@ -447,7 +474,7 @@
                 return pNext ? { ...pPrev, x: pPrev.x * (1-t) + pNext.x * t, y: pPrev.y * (1-t) + pNext.y * t } : pPrev;
             });
             const interpolateZone = (zonePrev, zoneNext) => {
-                if(!zonePrev || !zoneNext || zonePrev.points.length !== zoneNext.points.length) return zonePrev;
+                if(!zonePrev || !zoneNext || !zonePrev.points || !zoneNext.points || zonePrev.points.length !== zoneNext.points.length) return zonePrev;
                 const newPoints = zonePrev.points.map((p, i) => ({
                     x: p.x * (1 - t) + zoneNext.points[i].x * t,
                     y: p.y * (1 - t) + zoneNext.points[i].y * t
@@ -471,7 +498,7 @@
             const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
             const stats = { areaA: 0, areaB: 0, areaA6m: 0, areaB6m: 0 };
-            const aabb = court ? {
+            const aabb = court && court.points ? {
                 minX: Math.floor(Math.min(...court.points.map(p => p.x))), minY: Math.floor(Math.min(...court.points.map(p => p.y))),
                 maxX: Math.ceil(Math.max(...court.points.map(p => p.x))), maxY: Math.ceil(Math.max(...court.points.map(p => p.y))),
             } : { minX: 0, minY: 0, maxX: canvas.width, maxY: canvas.height };
@@ -495,6 +522,22 @@
                         }
                     }
                 }
+            }
+            if (!isVideo) {
+                const baseCanvas = document.createElement('canvas');
+                baseCanvas.width = canvas.width; baseCanvas.height = canvas.height;
+                const baseCtx = baseCanvas.getContext('2d');
+                baseCtx.drawImage(media.element, 0, 0, canvas.width, canvas.height);
+                const baseImageData = baseCtx.getImageData(0,0,canvas.width, canvas.height);
+                const overlayData = imageData.data;
+                for(let i=0; i < baseImageData.data.length; i+=4) {
+                    if(overlayData[i+3] > 0) {
+                        baseImageData.data[i] = baseImageData.data[i] * 0.4 + overlayData[i] * 0.6;
+                        baseImageData.data[i+1] = baseImageData.data[i+1] * 0.4 + overlayData[i+1] * 0.6;
+                        baseImageData.data[i+2] = baseImageData.data[i+2] * 0.4 + overlayData[i+2] * 0.6;
+                    }
+                }
+                return { imageData: baseImageData, stats };
             }
             return { imageData, stats };
         }
@@ -590,6 +633,9 @@
             
             recorder.start();
             
+            const originalTime = videoPlayer.currentTime;
+            videoPlayer.pause();
+            
             for (let i = 0; i < videoAnalysisData.length; i++) {
                 const frameData = videoAnalysisData[i];
                 const time = annotation.startTime + i / FRAME_RATE;
@@ -600,18 +646,30 @@
                 
                 const overlayCanvas = document.createElement('canvas');
                 overlayCanvas.width = canvas.width; overlayCanvas.height = canvas.height;
-                overlayCanvas.getContext('2d').putImageData(frameData.imageData, 0, 0);
+                const overlayCtx = overlayCanvas.getContext('2d');
+
+                if (frameData.imageData) overlayCtx.putImageData(frameData.imageData, 0, 0);
 
                 exportCtx.drawImage(overlayCanvas, 0, 0);
-                drawPolygon(frameData.court.points, COLORS.COURT);
-                drawPolygon(frameData.sixMeter.points, COLORS.SIX_METER);
-                drawPlayers(frameData.teamA, COLORS.A);
-                drawPlayers(frameData.teamB, COLORS.B);
+
+                // Re-draw zones and players on top for clarity
+                const tempCanvasForDrawing = document.createElement('canvas');
+                tempCanvasForDrawing.width = canvas.width; tempCanvasForDrawing.height = canvas.height;
+                const tempCtxForDrawing = tempCanvasForDrawing.getContext('2d');
+                
+                drawPolygon.call({ctx: tempCtxForDrawing}, frameData.court.points, COLORS.COURT);
+                drawPolygon.call({ctx: tempCtxForDrawing}, frameData.sixMeter.points, COLORS.SIX_METER);
+                drawPlayers.call({ctx: tempCtxForDrawing}, frameData.teamA, COLORS.A);
+                drawPlayers.call({ctx: tempCtxForDrawing}, frameData.teamB, COLORS.B);
+
+                exportCtx.drawImage(tempCanvasForDrawing, 0, 0);
 
                 progressBar.style.width = `${((i + 1) / videoAnalysisData.length) * 100}%`;
             }
 
             recorder.stop();
+            videoPlayer.currentTime = originalTime;
+            videoPlayer.play();
         }
 
         // --- Utility Functions ---
